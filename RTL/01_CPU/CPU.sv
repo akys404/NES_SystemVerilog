@@ -7,7 +7,7 @@ module CPU(
 
     // data bus
     output logic [15:0] addr_bus,
-    inout logic [7:0] data_bus,
+    inout logic [7:0] data_bus
 );
 
 endmodule
