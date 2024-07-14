@@ -9,7 +9,7 @@ module PPU(
     // data bus
     input logic [2:0] cpu_addr_bus,
     inout logic [7:0] cpu_data_bus,
-    output logic [7:0] ppu_msb_bus,
+    output logic [5:0] ppu_msb_bus,
     inout logic [7:0] ppu_lsb_bus
 );
 

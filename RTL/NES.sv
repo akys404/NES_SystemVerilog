@@ -24,7 +24,7 @@ assign cpu_addr = cpu_addr_bus[14:0];
 assign cpu_data = cpu_data_bus;
 
 // PPU section
-assign ppu_addr = {~ppu_msb_bus[7], ppu_msb_bus[6:0], ppu_lsb_bus_ff};
+assign ppu_addr = {~ppu_msb_bus[5], ppu_msb_bus[4:0], ppu_lsb_bus_ff};
 assign ppu_data = ppu_lsb_bus;
 
 
@@ -50,7 +50,8 @@ CPU CPU(
 //                 PPU.sv
 // ==========================================================
 wire ale, n_int;
-wire [7:0] ppu_msb_bus, ppu_lsb_bus, ppu_pixel;
+wire [5:0] ppu_msb_bus;
+wire [7:0] ppu_lsb_bus, ppu_pixel;
 wire [8:0] ppu_hcnt, ppu_vcnt;
 PPU PPU(
     .clk(clk_ppu),
