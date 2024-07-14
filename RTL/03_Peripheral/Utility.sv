@@ -14,7 +14,7 @@ endmodule
 // ==========================================================
 module ADDR_FF(
     input logic ale,
-    input logic [7:0] d,
+    inout logic [7:0] d,
     output logic [7:0] q
 );
 
