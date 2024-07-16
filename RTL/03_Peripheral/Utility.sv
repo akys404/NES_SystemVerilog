@@ -1,5 +1,5 @@
 // ==========================================================
-//                 Clock generator の実装
+//                 Clock generator
 // ==========================================================
 module CLKGEN(
     input logic clk, n_reset,
@@ -10,7 +10,7 @@ endmodule
 
 
 // ==========================================================
-//                 ADDR FF (LS373) の実装
+//                 ADDR FF (LS373)
 // ==========================================================
 module ADDR_FF(
     input logic ale,
@@ -22,12 +22,12 @@ endmodule
 
 
 // ==========================================================
-//                 ADDR decoder (LS139) の実装
+//                 ADDR decoder (LS139)
 // ==========================================================
 module ADDR_DEC(
     input logic m2,
     output logic cs, n_rom_sel, n_dbe,
-    input logic [2:0] addr
+    input logic [2:0] address
 );
 
 endmodule
