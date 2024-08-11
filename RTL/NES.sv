@@ -98,11 +98,11 @@ ADDR_DEC ADDR_DEC(
     .cs(sp_cs),
     .n_rom_sel(n_rom_sel),
     .n_dbe(n_dbe),
-    .addr(cpu_addr_bus[15:13])
+    .address(cpu_addr_bus[15:13])
 );
 
 // ==========================================================
-//                 RAM.sv
+//                 ROM_RAM.sv
 // ==========================================================
 SP_RAM SP_RAM(
     .cs(sp_cs),
