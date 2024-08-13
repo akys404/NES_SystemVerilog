@@ -4,8 +4,8 @@
 
 ```systemverilog
 module PPU(
-    input logic clkk, reset,
-    // drawing section
+    input logic clk, reset,
+    // rendering section
     output logic n_int,
     output logic [7:0] pixel,
     output logic [8:0] hcnt, vcnt,
@@ -31,8 +31,8 @@ Inoutポートを展開し、仮想的にInput/Outputポートに変換する。
 ```systemverilog
 /*
 module PPU(
-    input logic clkk, reset,
-    // drawing section
+    input logic clk, reset,
+    // rendering section
     output logic n_int,
     output logic [7:0] pixel,
     output logic [8:0] hcnt, vcnt,
@@ -86,10 +86,10 @@ assign ppu_data_bus_in = (!ale && !n_rd) ? ppu_lsb_bus : 8'b0;
 
 ```systemverilog
 module Renderer(
-    // Internal interactions
+    // Internal section
 
-    // External interactions
-    input logic clkk, reset,
+    // External section
+    input logic clk, reset,
     output logic n_int,
     output logic [7:0] pixel,
     output logic [8:0] hcnt, vcnt
@@ -104,50 +104,46 @@ endmodule
 logic 
 ```
 
-
-
 #### pixel
 
 ```systemverilog
 logic 
 ```
 
-
-
 #### hcnt, vcnt
 
 ```systemverilog
 // parameter
-parameter 
+parameter HCNTMAX = 9'd340;
+parameter VCNTMAX = 9'd261;
 
 // frame
 logic frame;
+wire frameend = (frame) ? HCNTMAX - 9'd1 : HCNTMAX;
 always_ff @(posedge clk)
     if (reset)
         frame <= 1'b0;
-    else if (vcnt == 9'd0 && hcnt == 9'd0)
+	else if (vcnt == VCNTMAX && hcnt == frameend)
         frame <= ~frame;
 
 // [8:0] hcnt
 always_ff @(posedge clk)
     if (reset)
         hcnt <= 9'd0;
-    else if (frame && vcnt == 9'd261 && hcnt == 9'd339)
+	else if (vcnt == VCNTMAX, hcnt == frameend)
         hcnt <= 9'd0;
-    else if (hcnt == 9'd340)
+	else if (hcnt == HCNTMAX)
         hcnt <= 9'd0;
     else
         hcnt <= hcnt + 9'd1;
 
 // [8:0] vcnt
 always_ff @(posedge clk)
-    if (reset)
+	if (reset)
         vcnt <= 9'd0;
-    else if (frame == 1'b1 && vcnt == 9'd261 && hcnt == 9'd339)
+	else if (vcnt == VCNTMAX, hcnt == frameend)
         vcnt <= 9'd0;
-    else if (frame == 1'b0 && vcnt == 9'd261 && hcnt == 9'd340)
-        vcnt <= 9'd0;
-    else if (hcnt == 9'd340)
+	else if (hcnt == HCNTMAX)
         vcnt <= vcnt + 9'd1;
 ```
 
@@ -159,10 +155,10 @@ always_ff @(posedge clk)
 
 ```systemverilog
 module PPU_BUS_IF(
-    // Internal interactions
+    // Internal section
 
-    // External interactions
-    input logic clkk, reset,
+    // External section
+    input logic clk, reset,
     input logic [7:0] ppu_data_bus_in,
     output logic ale, n_rd, n_we
     output logic [7:0] ppu_data_bus_out,
@@ -210,10 +206,10 @@ logic
 
 ```systemverilog
 module CPU_BUS_IF(
-    // Internal interactions
+    // Internal section
 
-    // External interactions
-    input logic clkk, reset,
+    // External section
+    input logic clk, reset,
     input logic rw, n_dbe,
     input logic [2:0] cpu_addr_bus,
     output logic [7:0] cpu_data_bus_out
