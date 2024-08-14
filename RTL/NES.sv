@@ -85,6 +85,22 @@ CLKGEN CLKGEN(
     .reset(reset)
 );
 
+SRAM CPU_SRAM(
+    .n_cs(!cpu_sram_cs),
+    .n_we(rw),
+    .n_oe(1'b0),
+    .address(cpu_addr_bus[10:0]),
+    .data(cpu_data_bus)
+);
+
+SRAM PPU_SRAM(
+    .n_cs(n_vram_cs),
+    .n_we(n_we),
+    .n_oe(n_rd),
+    .address({n_vram_a10, ppu_msb_bus[1:0], ppu_lsb_bus_ff}), // Unclear if n_vram_a10 should be inverted
+    .data(ppu_lsb_bus)
+);
+
 wire [7:0] ppu_lsb_bus_ff;
 ADDR_FF ADDR_FF(
     .ale(ale),
@@ -92,31 +108,13 @@ ADDR_FF ADDR_FF(
     .q(ppu_lsb_bus_ff)
 );
 
-wire n_dbe, sp_cs;
+wire n_dbe, cpu_sram_cs;
 ADDR_DEC ADDR_DEC(
     .m2(m2),
-    .cs(sp_cs),
+    .cs(cpu_sram_cs),
     .n_rom_sel(n_rom_sel),
     .n_dbe(n_dbe),
     .address(cpu_addr_bus[15:13])
-);
-
-// ==========================================================
-//                 ROM_RAM.sv
-// ==========================================================
-SP_RAM SP_RAM(
-    .cs(sp_cs),
-    .n_we(rw),
-    .addr_bus(cpu_addr_bus[10:0]),
-    .data_bus(cpu_data_bus)
-);
-
-BG_RAM BG_RAM(
-    .n_cs(n_vram_cs),
-    .n_we(n_we),
-    .n_oe(n_rd),
-    .addr_bus({n_vram_a10, ppu_msb_bus[1:0], ppu_lsb_bus_ff}), // Unclear if n_vram_a10 should be inverted
-    .data_bus(ppu_lsb_bus)
 );
 
 // ==========================================================
