@@ -87,6 +87,14 @@ assign ppu_data_bus_in = (!ale && !n_rd) ? ppu_lsb_bus : 8'b0;
 ```systemverilog
 module Renderer(
     // Internal section
+    // n_int
+    input logic [7:0] ppustatus,
+    input logic [7:0] ppuctrl,
+	// pixel
+    input logic [7:0] bg_lsb,
+    input logic [7:0] bg_msb,
+    input logic [7:0] bg_attr,
+    input logic [7:0] sprites [7:0],
 
     // External section
     input logic clk, reset,
@@ -94,29 +102,95 @@ module Renderer(
     output logic [7:0] pixel,
     output logic [8:0] hcnt, vcnt
 )
-    
+    // parameter
+    parameter HCNTMAX = 9'd340;
+    parameter VCNTMAX = 9'd261;
+    parameter VCNTVIS = 9'd239;
+
 endmodule
 ```
 
 #### n_int
 
+> 参考：[https://www.nesdev.org/wiki/NMI](https://www.nesdev.org/wiki/NMI)
+
+1. Start of vertical blanking (dot 1 of line 241) : Set vblank_flag in PPU to true.
+2. End of vertical blanking (dot 1 of line 261) : Set vblank_flag to false.
+3. Read [PPUSTATUS](https://www.nesdev.org/wiki/PPUSTATUS): Return old status of vblank_flag in bit 7, then set vblank_flag to false.
+4. Write to [PPUCTRL](https://www.nesdev.org/wiki/PPUCTRL): Set NMI_output to bit 7.
+
+The PPU pulls /NMI low if and only if both vblank_flag and NMI_output are true.
+
 ```systemverilog
-logic 
+wire n_int = !(ppustatus[7] && ppuctrl[7]);
 ```
 
 #### pixel
 
 ```systemverilog
-logic 
+// BG shift register
+wire SHIFT_EN = (9'd001 <= HCNT) && (HCNT <= 9'd336);
+
+logic [15:0] BGL_SHIFT, BGH_SHIFT;
+always_ff @(posedge CLK)
+    if (SHIFT_EN && HCNT[2:0] == 3'b000)
+        BGL_SHIFT <= {BGL_SHIFT[14:7], BGL_DATA};
+        BGH_SHIFT <= {BGH_SHIFT[14:7], BGH_DATA};
+    else if (SHIFT_EN)
+        BGL_SHIFT <= {BGL_SHIFT[14:0], 1'b1};
+        BGH_SHIFT <= {BGH_SHIFT[14:0], 1'b1};
+
+// Attributes shift register
+logic [8:0] ATL_SHIFT, ATH_SHIFT;
+always_ff @(posedge CLK)
+    if (SHIFT_EN)
+        ATL_SHIFT <= {ATL_SHIFT[7:0], AT_LATCH[0]};
+        ATH_SHIFT <= {ATH_SHIFT[7:0], AT_LATCH[1]};
+
+logic [1:0] AT_LATCH, AT_LATCH_nxt;
+always_ff @(posedge CLK)
+    if (SHIFT_EN && HCNT[2:0] == 3'b000)
+        AT_LATCH <= AT_LATCH_nxt;
+always_comb
+    case({REG_V[6], REG_V[1]})
+        2'b00: AT_LATCH_nxt = AT_DATA[1:0];
+        2'b01: AT_LATCH_nxt = AT_DATA[3:2];
+        2'b10: AT_LATCH_nxt = AT_DATA[5:4];
+        2'b11: AT_LATCH_nxt = AT_DATA[7:6];
+        default: AT_LATCH_nxt = 'x;
+    endcase
+
+
+// Fine_x select mux
+logic [3:0] INDEX_BG, INDEX_BG_nxt;
+always_ff @(posedge CLK)
+    INDEX_BG <= INDEX_BG_nxt;
+always_comb
+    case(REG_X)
+        3'b000: INDEX_BG_nxt = {ATH_SHIFT[7], ATL_SHIFT[7], BGH_SHIFT[15], BGH_SHIFT[15]};
+        3'b001: INDEX_BG_nxt = {ATH_SHIFT[6], ATL_SHIFT[6], BGH_SHIFT[14], BGH_SHIFT[14]};
+        3'b010: INDEX_BG_nxt = {ATH_SHIFT[5], ATL_SHIFT[5], BGH_SHIFT[13], BGH_SHIFT[13]};
+        3'b011: INDEX_BG_nxt = {ATH_SHIFT[4], ATL_SHIFT[4], BGH_SHIFT[12], BGH_SHIFT[12]};
+        3'b100: INDEX_BG_nxt = {ATH_SHIFT[3], ATL_SHIFT[3], BGH_SHIFT[11], BGH_SHIFT[11]};
+        3'b101: INDEX_BG_nxt = {ATH_SHIFT[2], ATL_SHIFT[2], BGH_SHIFT[10], BGH_SHIFT[10]};
+        3'b110: INDEX_BG_nxt = {ATH_SHIFT[1], ATL_SHIFT[1], BGH_SHIFT[9], BGH_SHIFT[9]};
+        3'b111: INDEX_BG_nxt = {ATH_SHIFT[0], ATL_SHIFT[0], BGH_SHIFT[8], BGH_SHIFT[8]};
+        default: INDEX_BG_nxt = 'x;
+    endcase
+
+// Priority mux
+logic [4:0] INDEX;
+always_ff @(posedge CLK)
+    INDEX <= {1'b0, INDEX_BG};
+
+// PRAM
+INDEX -> PIXEL;
+
 ```
 
 #### hcnt, vcnt
 
 ```systemverilog
-// parameter
-parameter HCNTMAX = 9'd340;
-parameter VCNTMAX = 9'd261;
-
 // frame
 logic frame;
 wire frameend = (frame) ? HCNTMAX - 9'd1 : HCNTMAX;
@@ -130,7 +204,7 @@ always_ff @(posedge clk)
 always_ff @(posedge clk)
     if (reset)
         hcnt <= 9'd0;
-	else if (vcnt == VCNTMAX, hcnt == frameend)
+else if (vcnt == VCNTMAX && hcnt == frameend)
         hcnt <= 9'd0;
 	else if (hcnt == HCNTMAX)
         hcnt <= 9'd0;
@@ -141,7 +215,7 @@ always_ff @(posedge clk)
 always_ff @(posedge clk)
 	if (reset)
         vcnt <= 9'd0;
-	else if (vcnt == VCNTMAX, hcnt == frameend)
+else if (vcnt == VCNTMAX && hcnt == frameend)
         vcnt <= 9'd0;
 	else if (hcnt == HCNTMAX)
         vcnt <= vcnt + 9'd1;
