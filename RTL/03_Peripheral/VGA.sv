@@ -126,30 +126,14 @@ wire [15:0] address_b = {vga_ivcnt[8:1], vga_ihcnt[8:1]};
 logic [11:0] vga_rgb;
 
 // FF section
-logic hdispen, vdispen;
-
-wire [9:0] hdstart = HFRONT + HWIDTH + HBACK - 10'd2;
+wire [9:0] hdstart = HFRONT + HWIDTH + HBACK - 10'd1;
 wire [9:0] hdend = HPERIOD - 10'd2;
-wire [9:0] vdstart = VFRONT + VWIDTH + VBACK - 10'd1;
+wire [9:0] vdstart = VFRONT + VWIDTH + VBACK;
 wire [9:0] vdend = VPERIOD - 10'd1;
+
+wire hdispen = (hdstart <= vga_hcnt) && (vga_hcnt <= hdend);
+wire vdispen = (vdstart <= vga_vcnt) && (vga_vcnt <= vdend);
 wire dispen = hdispen && vdispen;
-
-always_ff @(posedge clk_vga)
-    if (reset)
-        hdispen <= 1'b0;
-    else if (vga_hcnt == hdstart)
-        hdispen <= 1'b1;
-    else if (vga_hcnt == hdend)
-        hdispen <= 1'b0;
-
-always_ff @(posedge clk_vga)
-    if (reset)
-        vdispen <= 1'b0;
-    else if (vga_hcnt == hdstart)
-        if (vga_vcnt == vdstart)
-            vdispen <= 1'b1;
-        else if (vga_vcnt == vdend)
-            vdispen <= 1'b0;
 
 always_ff @(posedge clk_vga)
     if (reset) begin
