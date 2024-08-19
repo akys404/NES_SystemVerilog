@@ -1,1 +1,2 @@
-# Nothing is ignored
+# ignore all files in the Tasks/ directory
+Tasks/

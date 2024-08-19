@@ -22,8 +22,8 @@ parameter VBACK = 10'd33;
 
 parameter PPU_HDISP = 9'd256;
 parameter PPU_VDISP = 9'd240;
-parameter PPU_DELAY = 9'd3;     // INDEX_BG -> INDEX -> PRAM
-parameter VGA_DELAY = 10'd3;    // VRAM -> CROM -> FF
+parameter PPU_DELAY = 9'd4;     // hcnt=0:skip / 1:skip / 2:bg_index / 3:index / 4:pixel
+parameter VGA_DELAY = 10'd3;    // clk=0:address / 1:pixel / 2:vga_rgb / 3:vga_r,g,b
 
 
 // ==========================================================
@@ -136,21 +136,12 @@ wire vdispen = (vdstart <= vga_vcnt) && (vga_vcnt <= vdend);
 wire dispen = hdispen && vdispen;
 
 always_ff @(posedge clk_vga)
-    if (reset) begin
-        vga_r <= 4'h0;
-        vga_g <= 4'h0;
-        vga_b <= 4'h0;
-    end
-    else if (dispen) begin
-        vga_r <= vga_rgb[11:8];
-        vga_g <= vga_rgb[7:4];
-        vga_b <= vga_rgb[3:0];
-    end
-    else begin
-        vga_r <= 4'h0;
-        vga_g <= 4'h0;
-        vga_b <= 4'h0;
-    end
+    if (reset)
+        {vga_r, vga_g, vga_b} <= 12'h0;
+    else if (!dispen)
+        {vga_r, vga_g, vga_b} <= 12'h0;
+    else
+        {vga_r, vga_g, vga_b} <= vga_rgb;
 
 endmodule
 
