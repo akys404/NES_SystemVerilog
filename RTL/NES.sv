@@ -86,6 +86,8 @@ CLKGEN CLKGEN(
 );
 
 SRAM CPU_SRAM(
+    .clk(clk_cpu),
+    .reset(reset),
     .n_cs(!cpu_sram_cs),
     .n_we(rw),
     .n_oe(1'b0),
@@ -94,6 +96,8 @@ SRAM CPU_SRAM(
 );
 
 SRAM PPU_SRAM(
+    .clk(clk_ppu),
+    .reset(reset),
     .n_cs(n_vram_cs),
     .n_we(n_we),
     .n_oe(n_rd),
@@ -102,14 +106,14 @@ SRAM PPU_SRAM(
 );
 
 wire [7:0] ppu_lsb_bus_ff;
-ADDR_FF ADDR_FF(
+ADDR_latch ADDR_latch(
     .ale(ale),
     .d(ppu_lsb_bus),
     .q(ppu_lsb_bus_ff)
 );
 
 wire n_dbe, cpu_sram_cs;
-ADDR_DEC ADDR_DEC(
+ADDR_decoder ADDR_decoder(
     .m2(m2),
     .cs(cpu_sram_cs),
     .n_rom_sel(n_rom_sel),
