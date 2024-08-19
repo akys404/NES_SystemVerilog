@@ -58,7 +58,7 @@ logic [7:0] ppu_data_bus_in;
 logic [7:0] ppu_data_bus_out;
 
 assign ppu_msb_bus = ppu_addr_bus[13:8];
-assign ppu_lsb_bus = (ale) ? ppu_addr_bus[7:0] : (!n_we) ? ppu_data_bus_out : 8'bz;
+assign ppu_lsb_bus = (ale) ? ppu_addr_bus[7:0] : ppu_data_bus_out;
 assign ppu_data_bus_in = ppu_lsb_bus;
 ```
 
@@ -68,9 +68,7 @@ assign ppu_data_bus_in = ppu_lsb_bus;
 logic [7:0] cpu_data_bus_in;
 logic [7:0] cpu_data_bus_out;
 
-wire cpu_rd = !n_dbe && rw;
-
-assign cpu_data_bus = (cpu_rd) ? cpu_data_bus_out : 8'bz;
+assign cpu_data_bus = cpu_data_bus_out;
 assign cpu_data_bus_in = cpu_data_bus;
 ```
 
@@ -263,8 +261,6 @@ if (bSpriteZeroHitPossible && bSpriteZeroBeingRendered)
 
 ### 2-2. PPUバス入出力
 
-各種の
-
 ```systemverilog
 module PPU_BUS_IF(
     input logic clk, reset,
@@ -273,7 +269,7 @@ module PPU_BUS_IF(
     output logic [7:0] ppu_data_bus_out,
     // ale, n_rd, n_we
     input logic bg_fetch_en, sp_fetch_en,
-    input logic reg_rd, reg_we
+    input logic reg_ppu_rd, reg_ppu_we
 );
 ```
 
@@ -292,13 +288,13 @@ always_ff @(posedge clk)
 #### ★ n_rd
 
 ```systemverilog
-assign n_rd = !(bg_fetch_en || sp_fetch_en || reg_rd);
+assign n_rd = !(bg_fetch_en || sp_fetch_en || reg_ppu_rd);
 ```
 
 #### ★ n_we
 
 ```systemverilog
-assign n_we = !(reg_we);
+assign n_we = !(reg_ppu_we);
 ```
 
 #### ★ ppu_addr_bus
@@ -319,18 +315,16 @@ always_comb
 
 ```systemverilog
 always_comb
-    casex({reg_we})
-        1'b1: ppu_data_bus_out = reg_data_out;
+    casex({reg_ppu_we})
+        1'b1: ppu_data_bus_out = reg_ppu_data_bus_out;
         1'b0: ppu_data_bus_out = 'z;
-        default: ppu_addr_bus = 'x;
+        default: ppu_data_bus_out = 'x;
     endcase
 ```
 
 
 
 ### 2-3. CPUバス入出力
-
-各種の
 
 ```systemverilog
 module CPU_BUS_IF(
@@ -344,6 +338,13 @@ module CPU_BUS_IF(
 #### ★ cpu_data_bus_out
 
 ```systemverilog
+// レジスタの処理を書き終わってから再度検討する。
+always_comb
+    casex({!n_dbe, !rw})
+        2'b1x: cpu_data_bus_out = 'z;
+        2'b01: cpu_data_bus_out = 'z;
+        default: cpu_data_bus_out = 'x;
+    endcase
 ```
 
 
@@ -605,33 +606,33 @@ module Register(
     input logic rw, n_dbe,
     input logic [2:0] cpu_addr_bus,
     input logic [7:0] cpu_data_bus_in,
-    output logic reg_rd, reg_we,
-    output logic [7:0] reg_data_out
+    output logic reg_ppu_rd, reg_ppu_we,
+    output logic [7:0] reg_cpu_data_out
 );
 ```
 
-#### reg_rd
+#### reg_ppu_rd
 
 ```systemverilog
 
 ```
 
-#### reg_we
+#### reg_ppu_we
 
 ```systemverilog
 
 ```
 
-#### reg_data_out
+#### reg_ppu_data_bus_out
 
 ```systemverilog
 // ロジックのイメージ
 always_comb
     casex({})
-        2'b1x: reg_data_out = ppuctrl;
-        2'b01: reg_data_out = ppumask;
-        2'b00: reg_data_out = ppustatus;
-        default: reg_data_out = 'x;
+        2'b1x: reg_ppu_data_bus_out = ppuctrl;
+        2'b01: reg_ppu_data_bus_out = ppumask;
+        2'b00: reg_ppu_data_bus_out = ppustatus;
+        default: reg_ppu_data_bus_out = 'x;
     endcase
 ```
 
