@@ -77,17 +77,24 @@ assign cpu_data_bus_in = cpu_data_bus;
 
 ## 2. 基幹制御
 
-### 2-1. カウンタ
+### 2-1. 制御信号
 
 ```systemverilog
-module Counter(
+module Control(
     input logic clk, reset,
     // n_int
     input logic [7:0] ppustatus,
     input logic [7:0] ppuctrl,
     output logic n_int,
     // hcnt, vcnt
-    output logic [8:0] hcnt, vcnt
+    output logic [8:0] hcnt, vcnt,
+    // control signal
+    output logic rendering_en,
+    output logic fetch_en,
+    output logic sp_fetch_en,
+    output logic bg_fetch_en,
+    output logic bg_shift_en,
+    output logic inc_hori_v_en,
 );
 ```
 
@@ -144,6 +151,59 @@ always_ff @(posedge clk)
         vcnt <= vcnt + 9'd1;
 ```
 
+#### rendering_en
+
+- [ ] fetch_enフラグを作成する
+- [ ] sp_fetch_en = fetch_en & (261~320 ↑1,2,3,4 ↓5,6,7,8 )にする
+- [ ] bg_fetch_en = fetch_en & !sp_fetch_enにする
+
+```systemverilog
+assign rendering_en = ppumask[3] & ppumask[4];
+```
+
+#### fetch_en
+
+```systemverilog
+assign
+```
+
+#### sp_fetch_en
+
+Sprite evaluation occurs if either the sprite layer or background layer is enabled via $2001. Unless both layers are disabled, it merely hides sprite rendering.
+
+```systemverilog
+assign
+```
+
+#### bg_fetch_en
+
+```systemverilog
+// parameter
+parameter VCNT_FETCH_BEG = 9'd0;
+parameter VCNT_FETCH_END = 9'd239;
+parameter VCNT_PREFETCH = 9'd261;
+
+// backgrond fetch
+wire bg_fetch_en = ((VCNT_FETCH_BEG <= vcnt) && (vcnt <= VCNT_FETCH_END)) || (vcnt == VCNT_PREFETCH);
+```
+
+#### bg_shift_en
+
+```systemverilog
+// parameter
+parameter HCNT_SHIFT_BEG = 9'd1;
+parameter HCNT_SHIFT_END = 9'd336;
+
+// Shift enable
+wire shift_en = ((HCNT_SHIFT_BEG <= hcnt) && (hcnt <= HCNT_SHIFT_END));
+```
+
+#### inc_hori_v_en
+
+```systemverilog
+wire inc_hori_v_en = shift_en && (hcnt[2:0] == 3'b000);
+```
+
 
 
 ### 2-2. レンダリング
@@ -156,23 +216,12 @@ module Renderer(
     // pixel
     input logic [3:0] bg_index,
     input logic [4:0] sp_index,
-    output logic rendering_en,
     output logic [7:0] pixel,
     // sprite0_hit
     input logic sprite0_scanline,
     input logic sprite0_rendering,
     output logic sprite0_hit
 );
-```
-
-#### rendering_en
-
-- [ ] n_vblankフラグを作成する
-- [ ] sp_fetch_en = n_vblank & (261~320 ↑1,2,3,4 ↓5,6,7,8 )にする
-- [ ] bg_fetch_en = n_vbalnk & !sp_fetch_enにする
-
-```systemverilog
-assign rendering_en = ppumask[3] & ppumask[4];
 ```
 
 #### index
@@ -298,7 +347,7 @@ module PPU_BUS_IF(
     output logic [13:0] ppu_addr_bus,
     output logic [7:0] ppu_data_bus_out,
     // ale, n_rd, n_we
-    input logic bg_fetch_en, sp_fetch_en,
+    input logic fetch_en, bg_fetch_en, sp_fetch_en,
     input logic ppu_bus_rd_en, ppu_bus_we_en,
     // ppu_addr_bus
     input logic rendering_en
@@ -316,7 +365,7 @@ assign ale = (n_rd && n_we);
 #### ★ n_rd
 
 - [ ] rendering_rd / ppu_bus_rdを作成し、n_rd = !(rendering_rd | ppu_bus_rd)とする
-- [ ] rendering_rd は(n_vblank & rendering_en) = 0なら1で、それ以外なら hcntに応じた適切な値を出力するようにする。
+- [ ] rendering_rd は(fetch_en& rendering_en) = 0なら1で、それ以外なら hcntに応じた適切な値を出力するようにする。
 - [ ] ppu_bus_rdは通常１で、ppu_bus_rd_enが成立していたら前回値を反転する。
 
 ```systemverilog
@@ -403,28 +452,15 @@ To generate the background in the picture region, the PPU performs memory fetche
 ```systemverilog
 module BG_fetch(
     input logic clk, reset,
+    input logic bg_fetch_en,
     input logic bg_shift_en,
     input logic [8:0] hcnt, vcnt,
     input logic [7:0] ppu_data_bus_in,
     // for PPU_BUS_IF
-    output logic bg_fetch_en,
     output logic [13:0] bg_fetch_addr,
     // for BG_shifter
-    output logic bg_shift_en,
     output logic [7:0] bg_at, bg_lsb, bg_msb
 );
-```
-
-#### bg_fetch_en
-
-```systemverilog
-// parameter
-parameter VCNT_FETCH_BEG = 9'd0;
-parameter VCNT_FETCH_END = 9'd239;
-parameter VCNT_PREFETCH = 9'd261;
-
-// backgrond fetch
-wire bg_fetch_en = ((VCNT_FETCH_BEG <= vcnt) && (vcnt <= VCNT_FETCH_END)) || (vcnt == VCNT_PREFETCH);
 ```
 
 #### bg_fetch_addr
@@ -513,38 +549,23 @@ To generate the background in the picture region, the PPU performs memory fetche
 module BG_shifter(
     input logic clk, reset,
     input logic bg_shift_en,
+    input logic inc_hori_v_en,
     input logic [14:0] ppu_v,
     input logic [2:0] ppu_x,
     input logic [7:0] bg_at, bg_lsb, bg_msb,
-    // for BG_fetch
-    output logic bg_shift_en,
     // for Renderer
     output logic [3:0] bg_index
 );
 ```
 
-#### bg_shift_en
-
-```systemverilog
-// parameter
-parameter HCNT_SHIFT_BEG = 9'd1;
-parameter HCNT_SHIFT_END = 9'd336;
-
-// Shift enable
-wire shift_en = ((HCNT_SHIFT_BEG <= hcnt) && (hcnt <= HCNT_SHIFT_END));
-```
-
 #### bg_index
 
 ```systemverilog
-// Shift utility
-wire trans_en = shift_en && (hcnt[2:0] == 3'b000);
-
 // BG shift register
 // {bg_msb, bg_lsb} -> $BG_SHIFT;
 logic [15:0] bg_msb_shift, bg_lsb_shift;
 always_ff @(posedge clk)
-    if (trans_en) begin
+    if (inc_hori_v_en) begin
         bg_msb_shift <= {bg_msb_shift[14:7], bg_msb};
         bg_lsb_shift <= {bg_lsb_shift[14:7], bg_lsb};
     end
@@ -557,7 +578,7 @@ always_ff @(posedge clk)
 // {bg_at} -> $AT_SHIFT;
 logic [15:0] attr_msb_shift, attr_lsb_shift;
 always_ff @(posedge clk)
-    if (trans_en) begin
+    if (inc_hori_v_en) begin
         attr_msb_shift <= {attr_msb_shift[14:7], 8{bg_at_mux[1]}};
         attr_lsb_shift <= {attr_lsb_shift[14:7], 8{bg_at_mux[0]}};
     end
@@ -632,11 +653,11 @@ logic sprite0_next_scanline
 ```systemverilog
 module SP_fetch(
     input logic clk, reset,
+    input logic sp_fetch_en,
     input logic [8:0] hcnt, vcnt,
     input logic [7:0] ppu_data_bus_in,
     // for PPU_BUS_IF
-    output logic sp_fetch_en,
-    output logic [13:0] sp_fetch_addr,
+     output logic [13:0] sp_fetch_addr,
     // for SP_
 );
 ```
@@ -646,14 +667,6 @@ module SP_fetch(
 > 参考２：https://www.nesdev.org/wiki/PPU_sprite_priority
 
 OAM -> Secondary OAM -> Sprite fetch -> Sprite output unit [7:0] -> sp_index
-
-#### sp_fetch_en
-
-Sprite evaluation occurs if either the sprite layer or background layer is enabled via $2001. Unless both layers are disabled, it merely hides sprite rendering.
-
-```systemverilog
-
-```
 
 #### sp_fetch_addr
 
