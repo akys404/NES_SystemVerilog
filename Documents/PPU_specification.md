@@ -15,7 +15,7 @@ module PPU(
     // ppu bus section
     output logic ale, n_rd, n_we
     output logic [5:0] ppu_msb_bus,
-    inout logic [7:0] ppu_lsb_bus
+    inout logic [7:0] ppu_lsb_bus, ppu_lsb_bus_ale,
     // cpu bus section
     input logic rw, n_dbe,
     input logic [2:0] cpu_addr_bus,
@@ -59,6 +59,7 @@ logic [7:0] ppu_data_bus_out;
 
 assign ppu_msb_bus = ppu_addr_bus[13:8];
 assign ppu_lsb_bus = (ale) ? ppu_addr_bus[7:0] : ppu_data_bus_out;
+assign ppu_lsb_bus_ale = ppu_addr_bus[7:0];
 assign ppu_data_bus_in = ppu_lsb_bus;
 ```
 
@@ -155,6 +156,7 @@ module Renderer(
     // pixel
     input logic [3:0] bg_index,
     input logic [4:0] sp_index,
+    output logic rendering_en,
     output logic [7:0] pixel,
     // sprite0_hit
     input logic sprite0_scanline,
@@ -163,15 +165,31 @@ module Renderer(
 );
 ```
 
+#### rendering_en
+
+- [ ] n_vblankフラグを作成する
+- [ ] sp_fetch_en = n_vblank & (261~320 ↑1,2,3,4 ↓5,6,7,8 )にする
+- [ ] bg_fetch_en = n_vbalnk & !sp_fetch_enにする
+
+```systemverilog
+assign rendering_en = ppumask[3] & ppumask[4];
+```
+
 #### index
 
-> 参考１：https://www.nesdev.org/wiki/PPU_rendering#PPU_address_bus_contents
->
-> 参考２：https://www.nesdev.org/wiki/PPU_memory_map
+| BG pixel | Sprite pixel | Priority |     Output     |
+| :------: | :----------: | :------: | :------------: |
+|    0     |      0       |    X     | EXT in ($3F00) |
+|    0     |     1-3      |    X     |     Sprite     |
+|   1-3    |      0       |    X     |       BG       |
+|   1-3    |     1-3      |    0     |     Sprite     |
+|   1-3    |     1-3      |    1     |       BG       |
 
-On every 8th dot in these background fetch regions (the same dot on which the coarse x component of v is incremented), the pattern and attributes data are transferred into registers used for producing pixel data.
+**Border region**
+The border region displays the palette RAM entry selected by EXT input, either the data on the EXT pins if in input mode or 0 if in output mode. The first pixel on the left border is displayed with greyscale mode enabled. The border is affected by PPUMASK emphasis and greyscale effects.
 
-To generate the background in the picture region, the PPU performs memory fetches on dots 321-336 and 1-256 of scanlines 0-239 and 261. On every dot in these background fetch regions, a 4-bit pixel is selected by the fine x register from the low 8 bits of the pattern and attributes shift registers, which are then shifted.
+**Rendering disabled**
+With rendering disabled, both the picture and border regions display only EXT input. On PPUs that support CPU reads from palette RAM (RP2C02G, RP2C02H), the automatic greyscale effect on the first border pixel is disabled if a CPU palette read occurs at the exact same time.[1]
 
 ```systemverilog
 // Priority mux
@@ -181,18 +199,30 @@ To generate the background in the picture region, the PPU performs memory fetche
 
 #### ★ pixel
 
+When the PPU isn't rendering, its v register specifies the current VRAM address (and is output on the PPU's address pins). Whenever the low 14 bits of v point into palette RAM ($3F00-$3FFF), the PPU will continuously draw the color at that address instead of the EXT input, overriding the backdrop color. This is because the only way to access palette RAM is with this drawing mechanism.
+
+PPUMASK emphasis and greyscale effects apply even with rendering disabled.
+
+Addresses $3F04/$3F08/$3F0C are not used by the PPU when normally rendering (since the pattern values that would otherwise select those cells select the backdrop color instead). They can still be shown using the background palette direct access, explained below.
+
+- [ ] index演算で対応する。$3F04/$3F08/$3F0C/$3F10/$3F14/$3F18/$3F1C = $3F00とする。
+
+Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C. Note that this goes for writing as well as reading. A symptom of not having implemented this correctly in an emulator is the sky being black in *Super Mario Bros.*, which writes the backdrop color through $3F10.
+
+- [ ] pallet ramで対応する。
+
 ```systemverilog
 // Pallet RAM
 // $INDEX -> {pixel};
 
-wire n_pram_cs = (ppu_addr_bus < 14'h3F00) || (14'h3FFF < ppu_addr_bus);
+wire n_pram_cs = !((14'h3F00 <= pram_address) && (pram_address <= 14'h3FFF));
 wire n_pram_we = ;
 wire n_pram_oe = ;
 
-logic [4:0] pram_address;
+logic [13:0] pram_address;
 always_comb
     case({??})
-        1'b1: pram_address = index;
+        1'b1: pram_address = 14'h3F00 & {9'b0, index};
         1'b0: pram_address = ppu_addr_bus;
         default: bg_index_mux = 'x;
     endcase
@@ -204,7 +234,7 @@ always_comb
         default: pram_data = 8'bz;
     endcase
 
-assign pixel = ppu_data;
+assign pixel = pram_data;
 
 Pallet_RAM Pallet_RAM(
     .clk(clk),
@@ -212,7 +242,7 @@ Pallet_RAM Pallet_RAM(
     .n_cs(n_pram_cs),
     .n_we(n_pram_we),
     .n_oe(n_pram_oe),
-    .address(pram_address),
+    .address(pram_address[4:0]),
     .data(pram_data)
 );
 ```
@@ -221,8 +251,8 @@ Pallet_RAM Pallet_RAM(
 
 > 参考：https://www.nesdev.org/wiki/PPU_OAM#Internal_operation
 
-```systemverilog
-// sprite0_hit
+```cpp
+// sprite0_hit pseudo code
 /*
 input logic sprite0_scanline,
 input logic sprite0_rendering,
@@ -269,32 +299,46 @@ module PPU_BUS_IF(
     output logic [7:0] ppu_data_bus_out,
     // ale, n_rd, n_we
     input logic bg_fetch_en, sp_fetch_en,
-    input logic reg_ppu_rd, reg_ppu_we
+    input logic ppu_bus_rd_en, ppu_bus_we_en,
+    // ppu_addr_bus
+    input logic rendering_en
 );
 ```
 
 #### ★ ale
 
+ppu_lsb_busがPPUとカートリッジから同時に駆動されないようにするため、aleと!n_rd、!n_weが同時にアクティブにならないように注意する。
+
 ```systemverilog
-always_ff @(posedge clk)
-    if (reset)
-        ale <= 1'b1;
-    else if (!(n_rd && n_we))
-        ale <= ~ale;
-    else
-        ale <= 1'b1;
+assign ale = (n_rd && n_we);
 ```
 
 #### ★ n_rd
 
+- [ ] rendering_rd / ppu_bus_rdを作成し、n_rd = !(rendering_rd | ppu_bus_rd)とする
+- [ ] rendering_rd は(n_vblank & rendering_en) = 0なら1で、それ以外なら hcntに応じた適切な値を出力するようにする。
+- [ ] ppu_bus_rdは通常１で、ppu_bus_rd_enが成立していたら前回値を反転する。
+
 ```systemverilog
-assign n_rd = !(bg_fetch_en || sp_fetch_en || reg_ppu_rd);
+always_ff @(posedge clk)
+    if (reset)
+        n_rd <= 1'b1;
+    else if (bg_fetch_en || sp_fetch_en || ppu_bus_rd_en)
+        n_rd <= ~n_rd;
+    else
+        n_rd <= 1'b1;
 ```
 
 #### ★ n_we
 
 ```systemverilog
-assign n_we = !(reg_ppu_we);
+always_ff @(posedge clk)
+    if (reset)
+        n_we <= 1'b1;
+    else if (ppu_bus_we_en)
+        n_we <= ~n_we;
+    else
+        n_we <= 1'b1;
 ```
 
 #### ★ ppu_addr_bus
@@ -303,10 +347,11 @@ During frame rendering, provided rendering is enabled (i.e., when either backgro
 
 ```systemverilog
 always_comb
-    casex({sp_fetch_en, bg_fetch_en})
-        2'b1x: ppu_addr_bus = sp_fetch_addr;
-        2'b01: ppu_addr_bus = bg_fetch_addr;
-        2'b00: ppu_addr_bus = ppu_v;
+    casex({rendering_en, sp_fetch_en, bg_fetch_en})
+        3'b0xx: ppu_addr_bus = ppu_v;
+        3'b100: ppu_addr_bus = ppu_v;
+        3'b11x: ppu_addr_bus = sp_fetch_addr;
+        3'b101: ppu_addr_bus = bg_fetch_addr;
         default: ppu_addr_bus = 'x;
     endcase
 ```
@@ -315,7 +360,7 @@ always_comb
 
 ```systemverilog
 always_comb
-    casex({reg_ppu_we})
+    casex({ppu_bus_we_en})
         1'b1: ppu_data_bus_out = reg_ppu_data_bus_out;
         1'b0: ppu_data_bus_out = 'z;
         default: ppu_data_bus_out = 'x;
@@ -358,12 +403,14 @@ To generate the background in the picture region, the PPU performs memory fetche
 ```systemverilog
 module BG_fetch(
     input logic clk, reset,
+    input logic bg_shift_en,
     input logic [8:0] hcnt, vcnt,
     input logic [7:0] ppu_data_bus_in,
     // for PPU_BUS_IF
     output logic bg_fetch_en,
     output logic [13:0] bg_fetch_addr,
-    // for BG_push
+    // for BG_shifter
+    output logic bg_shift_en,
     output logic [7:0] bg_at, bg_lsb, bg_msb
 );
 ```
@@ -372,74 +419,125 @@ module BG_fetch(
 
 ```systemverilog
 // parameter
-parameter HFETCH_BEGIN = 9'd1;
-parameter HFETCH_END = 9'd340;
-
-parameter VFETCH_BEGIN = 9'd0;
-parameter VFETCH_END = 9'd239;
-parameter VPREFETCH = 9'd261;
+parameter VCNT_FETCH_BEG = 9'd0;
+parameter VCNT_FETCH_END = 9'd239;
+parameter VCNT_PREFETCH = 9'd261;
 
 // backgrond fetch
-wire bg_hfetch_en = ((HFETCH_BEGIN <= hcnt) && (hcnt <= HFETCH_END));
-wire bg_vfetch_en = ((VFETCH_BEGIN <= vcnt) && (vcnt <= VFETCH_END))
-|| (vcnt == VPREFETCH);
-wire bg_fetch_en = bg_hfetch_en && bg_vfetch_en;
+wire bg_fetch_en = ((VCNT_FETCH_BEG <= vcnt) && (vcnt <= VCNT_FETCH_END)) || (vcnt == VCNT_PREFETCH);
 ```
 
 #### bg_fetch_addr
 
+PPU addresses within the pattern tables can be decoded as follows:
+
+```
+DCBA98 76543210
+---------------
+0HNNNN NNNNPyyy
+|||||| |||||+++- T: Fine Y offset, the row number within a tile
+|||||| ||||+---- P: Bit plane (0: lsb; 1: msb)
+||++++-++++----- N: Tile number from name table
+|+-------------- H: Half of pattern table (0: "left"; 1: "right")
++--------------- 0: Pattern table is at $0000-$1FFF
+```
+
+
+
 ```systemverilog
-// bg_nt_addr, bg_at_addr, bg_lsb_addr, bg_lsb_addrの演算 ⇒ 調停
+// Address multiplexer
+always_ff @(posedge clk)
+    bg_fetch_addr <= bg_fetch_addr_mux;
+
+logic [13:0] bg_fetch_addr_mux;
+always_comb
+    case(hcnt[2:1])
+        2'b00: bg_fetch_addr_mux = bg_nt_addr;
+        2'b01: bg_fetch_addr_mux = (bg_shift_en) ? bg_at_addr : bg_nt_addr;
+        2'b10: bg_fetch_addr_mux = bg_lsb_addr;
+        2'b11: bg_fetch_addr_mux = bg_msb_addr;
+        default: bg_fetch_addr_mux = 'x;
+    endcase
+
+// Addressing
+wire [13:0] bg_nt_addr = {2'b10, ppu_v[11:0]};
+wire [13:0] bg_at_addr = {2'b10, ppu_v[11:10], 4'b1111, ppu_v[9:7], ppu_v[4:2]};
+wire [13:0] bg_lsb_addr = {1'b0, ppuctrl[4], bg_nt, 1'b0, ppu_v[14:12]};
+wire [13:0] bg_msb_addr = {1'b0, ppuctrl[4], bg_nt, 1'b1, ppu_v[14:12]};
 ```
 
 #### bg_nt
 
 ```systemverilog
-// bg_ntの一時保存
+logic [7:0] bg_nt;
+always_ff @(posedge clk)
+    if (bg_fetch_en && hcnt[2:0] == 3'b010)
+        bg_nt <= ppu_data_bus_in;
 ```
 
 #### bg_at
 
 ```systemverilog
-// bg_atの一時保存
+always_ff @(posedge clk)
+    if (bg_fetch_en && hcnt[2:0] == 3'b100)
+        bg_at <= ppu_data_bus_in;
 ```
 
 #### bg_lsb
 
 ```systemverilog
-// bg_lsbの一時保存
+always_ff @(posedge clk)
+    if (bg_fetch_en && hcnt[2:0] == 3'b110)
+        bg_lsb <= ppu_data_bus_in;
 ```
 
 #### bg_msb
 
 ```systemverilog
-// bg_msbのラベル付け
+assign bg_msb = ppu_data_bus_in;
 ```
 
 
 
 ### 3-2. 背景データ出力
 
+> 参考１：https://www.nesdev.org/wiki/PPU_rendering#PPU_address_bus_contents
+>
+> 参考２：https://www.nesdev.org/wiki/PPU_memory_map
+
+On every 8th dot in these background fetch regions (the same dot on which the coarse x component of v is incremented), the pattern and attributes data are transferred into registers used for producing pixel data.
+
+To generate the background in the picture region, the PPU performs memory fetches on dots 321-336 and 1-256 of scanlines 0-239 and 261. On every dot in these background fetch regions, a 4-bit pixel is selected by the fine x register from the low 8 bits of the pattern and attributes shift registers, which are then shifted.
+
 ```systemverilog
-module BG_push(
+module BG_shifter(
     input logic clk, reset,
+    input logic bg_shift_en,
     input logic [14:0] ppu_v,
     input logic [2:0] ppu_x,
     input logic [7:0] bg_at, bg_lsb, bg_msb,
+    // for BG_fetch
+    output logic bg_shift_en,
     // for Renderer
     output logic [3:0] bg_index
 );
 ```
 
-#### bg_index
+#### bg_shift_en
 
 ```systemverilog
 // parameter
-parameter HSHIFT_BEGIN = 9'd1;
-parameter HSHIFT_END = 9'd336;
+parameter HCNT_SHIFT_BEG = 9'd1;
+parameter HCNT_SHIFT_END = 9'd336;
 
+// Shift enable
+wire shift_en = ((HCNT_SHIFT_BEG <= hcnt) && (hcnt <= HCNT_SHIFT_END));
+```
+
+#### bg_index
+
+```systemverilog
 // Shift utility
-wire shift_en = ((HSHIFT_BEGIN <= hcnt) && (hcnt <= HSHIFT_END));
 wire trans_en = shift_en && (hcnt[2:0] == 3'b000);
 
 // BG shift register
@@ -481,9 +579,10 @@ always_comb
 
 // Fine_x select mux
 // $SHIFTER * $REG_X -> $INDEX_BG;
-logic [3:0] bg_index_mux;
 always_ff @(posedge clk)
     bg_index <= bg_index_mux;
+
+logic [3:0] bg_index_mux;
 always_comb
     case(ppu_x)
         3'b000: bg_index_mux = {attr_msb_shift[15], attr_lsb_shift[15], bg_msb_shift[15], bg_lsb_shift[15]};
@@ -550,6 +649,8 @@ OAM -> Secondary OAM -> Sprite fetch -> Sprite output unit [7:0] -> sp_index
 
 #### sp_fetch_en
 
+Sprite evaluation occurs if either the sprite layer or background layer is enabled via $2001. Unless both layers are disabled, it merely hides sprite rendering.
+
 ```systemverilog
 
 ```
@@ -606,18 +707,18 @@ module Register(
     input logic rw, n_dbe,
     input logic [2:0] cpu_addr_bus,
     input logic [7:0] cpu_data_bus_in,
-    output logic reg_ppu_rd, reg_ppu_we,
+    output logic ppu_bus_rd_en, ppu_bus_we_en,
     output logic [7:0] reg_cpu_data_out
 );
 ```
 
-#### reg_ppu_rd
+#### ppu_bus_rd_en
 
 ```systemverilog
 
 ```
 
-#### reg_ppu_we
+#### ppu_bus_we_en
 
 ```systemverilog
 
@@ -644,6 +745,21 @@ always_comb
 ```
 
 #### ppumask
+
+```
+7  bit  0
+---- ----
+BGRs bMmG
+|||| ||||
+|||| |||+- Greyscale (0: normal color, 1: produce a greyscale display)
+|||| ||+-- 1: Show background in leftmost 8 pixels of screen, 0: Hide
+|||| |+--- 1: Show sprites in leftmost 8 pixels of screen, 0: Hide
+|||| +---- 1: Show background
+|||+------ 1: Show sprites
+||+------- Emphasize red (green on PAL/Dendy)
+|+-------- Emphasize green (red on PAL/Dendy)
++--------- Emphasize blue
+```
 
 ```systemverilog
 ```
@@ -682,6 +798,18 @@ always_comb
 
 ### 5-2. 内部レジスタ
 
+The 15 bit registers *t* and *v* are composed this way during rendering:
+
+```
+yyy NN YYYYY XXXXX
+||| || ||||| +++++-- coarse X scroll
+||| || +++++-------- coarse Y scroll
+||| ++-------------- nametable select
++++----------------- fine Y scroll
+```
+
+
+
 #### ppu_v
 
 ```systemverilog
@@ -693,6 +821,11 @@ always_comb
 ```
 
 #### ppu_x
+
+```systemverilog
+```
+
+#### ppu_w
 
 ```systemverilog
 ```
