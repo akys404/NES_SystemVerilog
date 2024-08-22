@@ -90,13 +90,14 @@ module Counter(
     output logic [8:0] hcnt, vcnt,
     // timing control signal
     output logic [8:0] ihcnt, ivcnt,
-    output logic vcnt_visible_frame,
-    output logic vcnt_prerender_line,
-    output logic hcnt_oam2nd_clear,
-    output logic hcnt_sp_evaluation,
-    output logic hcnt_sp_fetch_next,
-    output logic hcnt_bg_fetch_next,
-    output logic hcnt_bg_fetch_unuse,
+    output logic vcnt_000_239,
+    output logic vcnt_261,
+    output logic hcnt_001_008,
+    output logic hcnt_001_064,
+    output logic hcnt_065_256,
+    output logic hcnt_257_320,
+    output logic hcnt_321_336,
+    output logic hcnt_337_340,
 );
 ```
 
@@ -160,46 +161,52 @@ assign [8:0] ihcnt = hcnt - 9'd1;
 assign [8:0] ivcnt = vcnt - 9'd1;
 ```
 
-#### vcnt_visible_frame
+#### vcnt_000_239
 
 ```systemverilog
-assign vcnt_visible_frame = ((9'd0 <= vcnt) && (vcnt <= 9'd239));
+assign vcnt_000_239 = ((9'd0 <= vcnt) && (vcnt <= 9'd239));
 ```
 
-#### vcnt_prerender_line
+#### vcnt_261
 
 ```systemverilog
-assign vcnt_prerender_line = (vcnt == 9'd261);
+assign vcnt_261 = (vcnt == 9'd261);
 ```
 
-#### hcnt_oam2nd_clear
+#### hcnt_001_008
 
 ```systemverilog
-assign hcnt_oam2nd_clear = ((9'd1 <= hcnt) && (hcnt <= 9'd64));
+assign hcnt_001_008 = ((9'd1 <= hcnt) && (hcnt <= 9'd8));
 ```
 
-#### hcnt_sp_evaluation
+#### hcnt_001_064
 
 ```systemverilog
-assign hcnt_sp_evaluation = ((9'd65 <= hcnt) && (hcnt <= 9'd256));
+assign hcnt_001_064 = ((9'd1 <= hcnt) && (hcnt <= 9'd64));
 ```
 
-#### hcnt_sp_fetch_next
+#### hcnt_065_256
 
 ```systemverilog
-assign hcnt_sp_fetch_next = ((9'd257 <= hcnt) && (hcnt <= 9'd320));
+assign hcnt_065_256 = ((9'd65 <= hcnt) && (hcnt <= 9'd256));
 ```
 
-#### hcnt_bg_fetch_next
+#### hcnt_257_320
 
 ```systemverilog
-assign hcnt_bg_fetch_next = ((9'd321 <= hcnt) && (hcnt <= 9'd336));
+assign hcnt_257_320 = ((9'd257 <= hcnt) && (hcnt <= 9'd320));
 ```
 
-#### hcnt_bg_fetch_unuse
+#### hcnt_321_336
 
 ```systemverilog
-assign hcnt_bg_fetch_unuse = ((9'd337 <= hcnt) && (hcnt <= 9'd340));
+assign hcnt_321_336 = ((9'd321 <= hcnt) && (hcnt <= 9'd336));
+```
+
+#### hcnt_337_340
+
+```systemverilog
+assign hcnt_337_340 = ((9'd337 <= hcnt) && (hcnt <= 9'd340));
 ```
 
 
@@ -212,11 +219,13 @@ assign hcnt_bg_fetch_unuse = ((9'd337 <= hcnt) && (hcnt <= 9'd340));
 module Renderer(
     input logic clk, reset,
     // rendering_en, fetch_en
+    input logic [8:0] hcnt, vcnt,
     input logic [7:0] ppumask,
-    input logic vcnt_visible_frame
-    input logic vcnt_prerender_line,
+    input logic vcnt_000_239
+    input logic vcnt_261,
     output logic rendering_en,
     output logic fetch_en,
+    output logic fetch_rd,
     // pixel
     input logic [3:0] bg_index,
     input logic [4:0] sp_index,
@@ -239,7 +248,13 @@ assign rendering_en = ppumask[3] & ppumask[4];
 Sprite evaluation occurs if either the sprite layer or background layer is enabled via $2001. Unless both layers are disabled, it merely hides sprite rendering.
 
 ```systemverilog
-assign fetch_en = vcnt_visible_frame | vcnt_prerender_line;
+assign fetch_en = vcnt_000_239 | vcnt_261;
+```
+
+#### fetch_rd
+
+```systemverilog
+assign fetch_rd = ((rendering_en & fetch_en) & !hcnt[0]);
 ```
 
 #### index
@@ -299,16 +314,12 @@ Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C. Note t
 // Pallet RAM
 wire n_pram_cs = !((14'h3F00 <= pram_address) && (pram_address <= 14'h3FFF));
 wire n_pram_we = (n_pram_cs | n_we);
+wire index_en = (rendering_en & fetch_en);
+
 wire [7:0] pram_data = (n_pram_we) ? 8'bz : ppu_data_bus_out;
+wire [13:0] pram_address = (index_en) ? 14'h3F00 & {9'b0, index} : ppu_addr_bus;
+
 assign pixel = pram_data;
-
-logic [13:0] pram_address;
-always_comb
-    case({rendering_en & fetch_en})
-        1'b1: pram_address = 14'h3F00 & {9'b0, index};
-        1'b0: pram_address = ppu_addr_bus;
-    endcase
-
 Pallet_RAM Pallet_RAM(
     .clk(clk),
     .reset(reset),
@@ -362,19 +373,18 @@ if (bSpriteZeroHitPossible && bSpriteZeroBeingRendered)
 
 
 
-### 2-2. PPUバス入出力
+### 2-3. PPUバス入出力
 
 ```systemverilog
 module PPU_BUS_IF(
     input logic clk, reset,
+    input logic rendering_en,
+    input logic bg_fetch_en, sp_fetch_en,
+    input logic fetch_rd, reg_rd, reg_we,
+
     output logic ale, n_rd, n_we,
     output logic [13:0] ppu_addr_bus,
-    output logic [7:0] ppu_data_bus_out,
-    // ale, n_rd, n_we
-    input logic fetch_en, bg_fetch_en, sp_fetch_en,
-    input logic ppu_bus_rd_en, ppu_bus_we_en,
-    // ppu_addr_bus
-    input logic rendering_en
+    output logic [7:0] ppu_data_bus_out
 );
 ```
 
@@ -383,35 +393,19 @@ module PPU_BUS_IF(
 ppu_lsb_busがPPUとカートリッジから同時に駆動されないようにするため、aleと!n_rd、!n_weが同時にアクティブにならないように注意する。
 
 ```systemverilog
-assign ale = (n_rd && n_we);
+assign ale = (n_rd & n_we);
 ```
 
 #### ★ n_rd
 
-- [ ] rendering_rd / ppu_bus_rdを作成し、n_rd = !(rendering_rd | ppu_bus_rd)とする
-- [ ] rendering_rd は(fetch_en& rendering_en) = 0なら1で、それ以外なら hcntに応じた適切な値を出力するようにする。
-- [ ] ppu_bus_rdは通常１で、ppu_bus_rd_enが成立していたら前回値を反転する。
-
 ```systemverilog
-always_ff @(posedge clk)
-    if (reset)
-        n_rd <= 1'b1;
-    else if (bg_fetch_en || sp_fetch_en || ppu_bus_rd_en)
-        n_rd <= ~n_rd;
-    else
-        n_rd <= 1'b1;
+assign n_rd = !(fetch_rd | reg_rd);
 ```
 
 #### ★ n_we
 
 ```systemverilog
-always_ff @(posedge clk)
-    if (reset)
-        n_we <= 1'b1;
-    else if (ppu_bus_we_en)
-        n_we <= ~n_we;
-    else
-        n_we <= 1'b1;
+assign n_we = !reg_we;
 ```
 
 #### ★ ppu_addr_bus
@@ -432,15 +426,30 @@ always_comb
 
 ```systemverilog
 always_comb
-    casex({ppu_bus_we_en})
-        1'b1: ppu_data_bus_out = reg_ppu_data_bus_out;
+    casex({reg_we})
+        1'b1: ppu_data_bus_out = reg_ppu_data_bus;
         1'b0: ppu_data_bus_out = 'z;
     endcase
 ```
 
 
 
-### 2-3. CPUバス入出力
+### 2-4. CPUバス入出力
+
+### 😊8/23 ここから😊
+
+```systemverilog
+module PPU_BUS_IF(
+    input logic clk, reset,
+    input logic rendering_en,
+    input logic bg_fetch_en, sp_fetch_en,
+    input logic fetch_rd, reg_rd, reg_we,
+
+    output logic ale, n_rd, n_we,
+    output logic [13:0] ppu_addr_bus,
+    output logic [7:0] ppu_data_bus_out
+);
+```
 
 ```systemverilog
 module CPU_BUS_IF(
@@ -487,7 +496,7 @@ module BG_fetch(
 #### bg_fetch_en
 
 ```systemverilog
-assign bg_fetch_en = fetch_en & (!hcnt_sp_fetch_next | ihcnt[3]);
+assign bg_fetch_en = fetch_en & (!hcnt_257_320 | ihcnt[3]);
 ```
 
 #### bg_fetch_addr
@@ -574,9 +583,9 @@ module BG_shifter(
     input logic clk, reset,
     input logic [8:0] ihcnt, ivcnt,
     input logic fetch_en,
-    input logic hcnt_oam2nd_clear,
-    input logic hcnt_sp_evaluation,
-    input logic hcnt_bg_fetch_next,
+    input logic hcnt_001_064,
+    input logic hcnt_065_256,
+    input logic hcnt_321_336,
     input logic [14:0] ppu_v,
     input logic [2:0] ppu_x,
     input logic [7:0] bg_at, bg_lsb, bg_msb,
@@ -588,7 +597,7 @@ module BG_shifter(
 #### bg_shift_en
 
 ```systemverilog
-wire shift_en = fetch_en & (hcnt_oam2nd_clear | hcnt_sp_evaluation | hcnt_bg_fetch_next);
+wire shift_en = fetch_en & (hcnt_001_64 | hcnt_065_256 | hcnt_321_336);
 ```
 
 #### bg_trans_en
@@ -598,6 +607,8 @@ wire bg_trans_en = shift_en && (ihcnt[2:0] == 3'b111);
 ```
 
 #### bg_index
+
+- [ ] PPUMASK[1] = 0 の時bg_index = 4'b0とする。
 
 ```systemverilog
 // BG shift register
@@ -708,7 +719,7 @@ OAM -> Secondary OAM -> Sprite fetch -> Sprite output unit [7:0] -> sp_index
 #### sp_fetch_en
 
 ```systemverilog
-assign sp_fetch_en = fetch_en & (hcnt_sp_fetch_next & !ihcnt[3]);
+assign sp_fetch_en = fetch_en & (hcnt_257_320 & !ihcnt[3]);
 ```
 
 #### sp_fetch_addr
@@ -747,6 +758,8 @@ module Sprite_output_unit(
 
 Sprite_output_unit#0~7を入力として、優先度の高いユニットからの入力を出力する。
 
+- [ ] PPUMASK[2] = 0 の時sp_index = 5'b0とする。
+
 ```systemverilog
 always_comb
 ```
@@ -763,24 +776,24 @@ module Register(
     input logic rw, n_dbe,
     input logic [2:0] cpu_addr_bus,
     input logic [7:0] cpu_data_bus_in,
-    output logic ppu_bus_rd_en, ppu_bus_we_en,
+    output logic reg_rd, reg_we,
     output logic [7:0] reg_cpu_data_out
 );
 ```
 
-#### ppu_bus_rd_en
+#### reg_rd
 
 ```systemverilog
 
 ```
 
-#### ppu_bus_we_en
+#### reg_we
 
 ```systemverilog
 
 ```
 
-#### reg_ppu_data_bus_out
+#### reg_ppu_data_bus
 
 ```systemverilog
 // ロジックのイメージ
